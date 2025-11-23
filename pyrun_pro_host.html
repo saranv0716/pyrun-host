@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>PyRun Host — Mini Web Python IDE</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/theme/material-darker.min.css">
+  <style>
+    :root{--bg:#0b1220;--panel:#071029;--muted:#9aa8b2;--accent:#06b6d4;--success:#16a34a}
+    html,body{height:100%;margin:0;background:linear-gradient(180deg,#071124 0%, #07192b 100%);font-family:Inter,Segoe UI,Arial,sans-serif;color:#e6eef6}
+    header{padding:10px 14px;border-bottom:1px solid rgba(255,255,255,0.03);display:flex;gap:12px;align-items:center}
+    .brand{font-weight:700;font-size:16px;color:var(--accent)}
+    .container{display:grid;grid-template-columns:1fr 380px;gap:12px;padding:12px;height:calc(100% - 64px)}
+    .editor-panel{background:var(--panel);padding:10px;border-radius:8px;display:flex;flex-direction:column;height:100%}
+    #editorWrapper{flex:1;border-radius:6px;overflow:hidden;border:1px solid rgba(255,255,255,0.03);background:#071029}
+    .toolbar{display:flex;gap:8px;margin-bottom:8px}
+    button{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.03);color:#e6eef6;padding:8px 10px;border-radius:6px;cursor:pointer}
+    button.primary{background:linear-gradient(90deg,var(--accent),#3dd5c6);color:#052023;font-weight:700}
+    .side-panel{background:var(--panel);padding:12px;border-radius:8px;display:flex;flex-direction:column;height:100%}
+    .output{background:#051220;border-radius:6px;padding:10px;flex:1;overflow:auto;font-family:ui-monospace,monospace;font-size:13px}
+    .section{margin-bottom:10px}
+    label{font-size:12px;color:var(--muted)}
+    select,input[type=number]{width:100%;padding:8px;margin-top:6px;border-radius:6px;background:#071029;border:1px solid rgba(255,255,255,0.02);color:#e6eef6}
+    .small{font-size:12px;color:var(--muted)}
+    footer{padding:8px 14px;border-top:1px solid rgba(255,255,255,0.03);font-size:13px;color:var(--muted);display:flex;justify-content:space-between;align-items:center}
+    .tabs{display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap}
+    .tab{padding:6px 10px;border-radius:6px;background:rgba(255,255,255,0.02);cursor:pointer}
+    .tab.active{background:linear-gradient(90deg,#0dd6e0,#3dd5c6);color:#052023;font-weight:700}
+    .row{display:flex;gap:8px;align-items:center}
+    input[type=file]{display:none}
+    @media(max-width:1000px){.container{grid-template-columns:1fr;grid-auto-rows:1fr}.side-panel{height:360px}}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">PyRun Host — Mini IDE</div>
+    <div class="hint small">Run Python in browser (Pyodide). Safe for public hosting. Files are stored only in your browser.</div>
+  </header>
+
+  <div class="container">
+    <div class="editor-panel">
+      <div class="toolbar">
+        <button id="runBtn" class="primary" title="Run (Ctrl/Cmd+Enter)">Run ▶</button>
+        <button id="stopBtn" title="Stop (if supported)">Stop</button>
+        <button id="clearOutput">Clear Output</button>
+        <button id="formatBtn">Format</button>
+        <div style="flex:1"></div>
+        <button id="downloadBtn" title="Download current file">Download</button>
+        <label for="uploadInput" style="margin:0"><button id="uploadBtn">Upload</button></label>
+        <input id="uploadInput" type="file" accept=".py,text/plain" />
+      </div>
+
+      <div class="tabs" id="tabs"></div>
+      <div id="editorWrapper"><textarea id="editor" spellcheck="false"></textarea></div>
+
+      <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
+        <label class="small">Execution timeout (s)</label>
+        <input id="timeout" type="number" value="20" min="1" style="width:90px" />
+        <label class="small">Pyodide v</label>
+        <select id="pyodideVersion" style="width:160px">
+          <option value="0.23.4">0.23.4</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="side-panel">
+      <div class="section">
+        <label>Output</label>
+        <div id="output" class="output">Output will appear here.</div>
+      </div>
+
+      <div class="section">
+        <label>Packages (micropip)</label>
+        <input id="pkgName" placeholder="e.g. numpy pandas rich" />
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button id="installBtn">Install</button>
+          <button id="listPkgs">List</button>
+        </div>
+        <div class="small" style="margin-top:6px;color:var(--muted)">Note: Only packages available for Pyodide will install. See Pyodide docs.</div>
+      </div>
+
+      <div class="section">
+        <label>Examples</label>
+        <select id="examples">
+          <option value="">-- Choose example --</option>
+          <option value="numpy">NumPy demo</option>
+          <option value="pandas">Pandas demo</option>
+          <option value="plot">Matplotlib demo</option>
+          <option value="diceware">Diceware passphrase</option>
+        </select>
+        <button id="loadExample">Load</button>
+      </div>
+
+      <div class="section">
+        <label>Settings</label>
+        <div class="small">Auto-save is enabled. Upload files are read into tabs only; nothing is sent anywhere.</div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <div>PyRun Host — Public-ready Mini IDE • Use GitHub Pages / Netlify to host</div>
+    <div class="small">Created for educational use — no device filesystem access</div>
+  </footer>
+
+  <!-- CodeMirror -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/python/python.min.js"></script>
+
+  <script>
+  // --- Editor & Tabs ---
+  let tabs = [];
+  let currentTab = null;
+  const tabsEl = document.getElementById('tabs');
+  const editorTextarea = document.getElementById('editor');
+  let cm = CodeMirror.fromTextArea(editorTextarea, {
+    mode: 'python',
+    theme: 'material-darker',
+    lineNumbers: true,
+    indentUnit: 4,
+    tabSize: 4
+  });
+
+  function createTab(name, content=''){
+    const id = 'tab_'+Date.now()+'_'+Math.floor(Math.random()*9999);
+    tabs.push({id,name,content,dirty:false});
+    renderTabs();
+    switchTab(id);
+    saveAllToLocal();
+  }
+  function renderTabs(){
+    tabsEl.innerHTML='';
+    tabs.forEach(t=>{
+      const d = document.createElement('div');
+      d.className='tab' + (t.id===currentTab?' active':'');
+      d.textContent = t.name + (t.dirty?' *':'');
+      d.onclick = ()=> switchTab(t.id);
+      d.oncontextmenu = (e)=>{ e.preventDefault(); closeTab(t.id); };
+      tabsEl.appendChild(d);
+    });
+  }
+  function switchTab(id){
+    if(currentTab){
+      const old = tabs.find(x=>x.id===currentTab);
+      if(old) old.content = cm.getValue();
+    }
+    currentTab = id;
+    const tab = tabs.find(x=>x.id===id);
+    if(tab) cm.setValue(tab.content||'');
+    renderTabs();
+  }
+  function closeTab(id){
+    const idx = tabs.findIndex(x=>x.id===id);
+    if(idx>=0){
+      tabs.splice(idx,1);
+      if(tabs.length) switchTab(tabs[0].id);
+      else createTab('main.py','# New file\\nprint(\"Hello\")');
+    }
+    saveAllToLocal();
+  }
+  function saveCurrentTab(){
+    if(!currentTab) return null;
+    const tab = tabs.find(x=>x.id===currentTab);
+    if(tab){ tab.content = cm.getValue(); tab.dirty=false; saveAllToLocal(); return tab; }
+    return null;
+  }
+  function markDirty(){
+    const tab = tabs.find(x=>x.id===currentTab);
+    if(tab){ tab.dirty = true; renderTabs(); saveAllToLocal(); }
+  }
+
+  // create initial tabs or restore from localStorage
+  function loadFromLocal(){
+    try{
+      const data = localStorage.getItem('pyrun_project_v1');
+      if(!data) { createTab('main.py', '# PyRun Host - main.py\\nprint(\"Hello from PyRun Host\")'); createTab('utils.py', '# utils\\ndef add(a,b):\\n    return a+b'); return; }
+      const proj = JSON.parse(data);
+      proj.tabs.forEach(t=> tabs.push(t));
+      currentTab = proj.currentTab || (tabs.length?tabs[0].id:null);
+      renderTabs();
+      if(currentTab) switchTab(currentTab); else if(tabs.length) switchTab(tabs[0].id);
+    }catch(e){ createTab('main.py', '# PyRun Host - main.py\\nprint(\"Hello from PyRun Host\")'); }
+  }
+  function saveAllToLocal(){
+    try{
+      if(currentTab){
+        const ct = tabs.find(x=>x.id===currentTab); if(ct) ct.content = cm.getValue();
+      }
+      const obj = {tabs,currentTab};
+      localStorage.setItem('pyrun_project_v1', JSON.stringify(obj));
+    }catch(e){}
+  }
+  cm.on('change', ()=> markDirty());
+
+  loadFromLocal();
+
+  // --- Output helpers ---
+  const outputEl = document.getElementById('output');
+  function appendOutput(s){ const p=document.createElement('pre'); p.style.margin='6px 0'; p.textContent=s; outputEl.appendChild(p); outputEl.scrollTop=outputEl.scrollHeight; }
+  function setOutput(s){ outputEl.innerText = s; }
+
+  // --- Pyodide loader & runner ---
+  let pyodide = null;
+  let pyodideReady = false;
+  async function loadPyodideVersion(version){
+    if(pyodide) return;
+    setOutput('Loading Pyodide v'+version+' ... (this may take 5-20s)');
+    const url = `https://cdn.jsdelivr.net/pyodide/v${version}/full/pyodide.js`;
+    try{
+      await import(url);
+      pyodide = await loadPyodide({indexURL: `https://cdn.jsdelivr.net/pyodide/v${version}/full/`});
+      pyodideReady = true;
+      appendOutput('Pyodide loaded. Try running your code (Ctrl/Cmd+Enter).');
+    }catch(e){
+      appendOutput('Pyodide load failed: '+e);
+    }
+  }
+  loadPyodideVersion(document.getElementById('pyodideVersion').value);
+
+  // run / stop
+  let runningPromise = null;
+  document.getElementById('runBtn').onclick = runCurrent;
+  document.getElementById('stopBtn').onclick = ()=> {
+    if(runningPromise && typeof runningPromise.cancel === 'function'){ runningPromise.cancel(); appendOutput('Execution cancelled'); }
+    else appendOutput('Stop not supported; wait for timeout.');
+  };
+
+  async function runCurrent(){
+    if(!pyodideReady){ appendOutput('Pyodide not ready'); return; }
+    saveCurrentTab();
+    const tab = tabs.find(t=>t.id===currentTab);
+    if(!tab){ appendOutput('No active tab'); return; }
+    const code = tab.content;
+    setOutput('Executing...');
+    try{
+      let stdout=''; let stderr='';
+      pyodide.setStdout({batched: s => { stdout += s; }});
+      pyodide.setStderr({batched: s => { stderr += s; }});
+      const to = Number(document.getElementById('timeout').value) || 20;
+      runningPromise = pyodide.runPythonAsync(code);
+      const res = await Promise.race([runningPromise, new Promise((_,rej)=>setTimeout(()=>rej(new Error('Timeout')), to*1000))]);
+      let out = '';
+      if(stdout) out += '--- stdout ---\\n'+stdout;
+      if(stderr) out += '--- stderr ---\\n'+stderr;
+      if(res !== undefined) out += '\\n--- result ---\\n'+String(res);
+      setOutput(out || 'Finished (no output)');
+    }catch(e){
+      appendOutput('Error: '+e);
+    }finally{
+      try{ pyodide.setStdout({batched: s => appendOutput(s)}); }catch(e){}
+      try{ pyodide.setStderr({batched: s => appendOutput(s)}); }catch(e){}
+      runningPromise = null;
+    }
+  }
+
+  // keyboard shortcuts
+  window.addEventListener('keydown', (e)=>{
+    if((e.ctrlKey||e.metaKey) && e.key==='Enter'){ e.preventDefault(); runCurrent(); }
+    if((e.ctrlKey||e.metaKey) && e.key==='s'){ e.preventDefault(); saveCurrentTab(); const t = tabs.find(x=>x.id===currentTab); if(t){ downloadText(t.name, t.content);} }
+  });
+
+  // --- Package install (micropip) ---
+  document.getElementById('installBtn').onclick = async ()=>{
+    if(!pyodideReady){ appendOutput('Pyodide not ready'); return; }
+    const names = document.getElementById('pkgName').value.trim();
+    if(!names){ appendOutput('Enter package names'); return; }
+    appendOutput('Installing: '+names);
+    try{
+      await pyodide.loadPackage('micropip');
+      const micropip = pyodide.pyimport('micropip');
+      const pkgs = names.split(/\s+/);
+      for(const p of pkgs){
+        appendOutput('Installing '+p+' ...');
+        await micropip.install(p);
+        appendOutput('Installed '+p);
+      }
+    }catch(e){ appendOutput('Install error: '+e); }
+  };
+  document.getElementById('listPkgs').onclick = ()=> {
+    try{ const loaded = pyodide && pyodide.loadedPackages ? Object.keys(pyodide.loadedPackages) : []; appendOutput('Loaded: '+(loaded.length?loaded.join(', '):'<none>')); }catch(e){ appendOutput('Error listing packages: '+e); }
+  };
+
+  // --- Examples ---
+  document.getElementById('loadExample').onclick = ()=>{
+    const v = document.getElementById('examples').value;
+    if(v==='numpy') createTab('numpy_demo.py',"import numpy as np\\narr=np.arange(12).reshape(3,4)\\nprint(arr)\\n");
+    else if(v==='pandas') createTab('pandas_demo.py',"import pandas as pd\\ndf=pd.DataFrame({'a':[1,2],'b':[3,4]})\\nprint(df)\\n");
+    else if(v==='plot') createTab('plot_demo.py',"import matplotlib.pyplot as plt\\nimport numpy as np\\nx=np.linspace(0,6.28,200)\\nplt.plot(x,np.sin(x))\\nplt.savefig('plot.png')\\nprint('plot.png saved to virtual FS')\\n");
+    else if(v==='diceware') createTab('diceware.py',"import secrets\\nwords=['correct','horse','battery','staple','alpha','bravo','charlie']\\nprint(' '.join(secrets.choice(words) for _ in range(6)))\\n");
+  };
+
+  // --- Upload / Download ---
+  const uploadInput = document.getElementById('uploadInput');
+  uploadInput.addEventListener('change', (e)=>{
+    const f = e.target.files[0]; if(!f) return;
+    const reader = new FileReader();
+    reader.onload = ()=> createTab(f.name, reader.result);
+    reader.readAsText(f);
+    uploadInput.value = '';
+  });
+
+  document.getElementById('downloadBtn').onclick = ()=>{
+    saveCurrentTab();
+    const t = tabs.find(x=>x.id===currentTab);
+    if(!t){ appendOutput('No tab'); return; }
+    downloadText(t.name, t.content);
+  };
+  function downloadText(filename, text){
+    const blob = new Blob([text], {type:'text/plain'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  // Format (attempt to use black)
+  document.getElementById('formatBtn').onclick = async ()=>{
+    if(!pyodideReady){ appendOutput('Pyodide not ready'); return; }
+    appendOutput('Formatting (attempting to install black)...');
+    try{
+      await pyodide.loadPackage('micropip');
+      const micropip = pyodide.pyimport('micropip');
+      try{ await micropip.install('black'); }catch(e){ appendOutput('Black install failed: '+e); }
+      const black = pyodide.pyimport('black');
+      const src = cm.getValue();
+      const formatted = black.format_str(src, {mode: black.Mode()});
+      cm.setValue(formatted);
+    }catch(e){ appendOutput('Format error: '+e); }
+  };
+
+  // Auto-save interval
+  setInterval(saveAllToLocal, 2000);
+
+  // Initialize with one tab if none
+  if(!tabs.length) createTab('main.py', '# PyRun Host - main.py\\nprint(\"Hello from PyRun Host\")');
+
+  </script>
+</body>
+</html>
